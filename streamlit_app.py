@@ -1,422 +1,454 @@
-import React, { useState, useEffect } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { Activity, Droplets, ThermometerSun, AlertTriangle, TrendingUp, Database } from 'lucide-react';
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+from datetime import datetime, timedelta
+import pickle
+import time
 
-const WaterQualityDashboard = () => {
-  const [ph, setPh] = useState(7.5);
-  const [temperature, setTemperature] = useState(28.0);
-  const [prediction, setPrediction] = useState(null);
-  const [historicalData, setHistoricalData] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [realTimeMode, setRealTimeMode] = useState(false);
+# Page configuration
+st.set_page_config(
+    page_title="Water Quality Monitoring",
+    page_icon="💧",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-  // Initialize with sample historical data
-  useEffect(() => {
-    const generateHistoricalData = () => {
-      const data = [];
-      const now = new Date();
-      for (let i = 30; i >= 0; i--) {
-        const date = new Date(now - i * 24 * 60 * 60 * 1000);
-        data.push({
-          timestamp: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-          fullDate: date,
-          pH: 7.0 + Math.random() * 2,
-          temperature: 25 + Math.random() * 6,
-          ammonia: 0.1 + Math.random() * 0.4
-        });
-      }
-      return data;
-    };
-    setHistoricalData(generateHistoricalData());
-  }, []);
-
-  // Simulate real-time sensor updates
-  useEffect(() => {
-    if (realTimeMode) {
-      const interval = setInterval(() => {
-        const newPh = 7.0 + Math.random() * 2;
-        const newTemp = 25 + Math.random() * 6;
-        setPh(parseFloat(newPh.toFixed(2)));
-        setTemperature(parseFloat(newTemp.toFixed(2)));
-        
-        // Add to historical data
-        const now = new Date();
-        setHistoricalData(prev => {
-          const newData = [...prev, {
-            timestamp: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-            fullDate: now,
-            pH: newPh,
-            temperature: newTemp,
-            ammonia: predictAmmonia(newPh, newTemp)
-          }];
-          return newData.slice(-50); // Keep last 50 readings
-        });
-      }, 3000);
-      return () => clearInterval(interval);
+# Custom CSS
+st.markdown("""
+    <style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1E40AF;
+        text-align: center;
+        padding: 1rem;
+        background: linear-gradient(90deg, #3B82F6 0%, #06B6D4 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }
-  }, [realTimeMode]);
+    .metric-card {
+        background-color: #F0F9FF;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #3B82F6;
+    }
+    .warning-box {
+        background-color: #FEF3C7;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #F59E0B;
+    }
+    .danger-box {
+        background-color: #FEE2E2;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #EF4444;
+    }
+    .success-box {
+        background-color: #D1FAE5;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #10B981;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-  // Simple ML prediction model (mimics trained model)
-  const predictAmmonia = (phValue, tempValue) => {
-    // Simplified prediction based on pH and temperature relationship
-    // Higher pH + Higher temp = Higher ammonia
-    const phFactor = (phValue - 7.0) * 0.08;
-    const tempFactor = (tempValue - 25.0) * 0.015;
-    const baseAmmonia = 0.15;
-    const predicted = baseAmmonia + phFactor + tempFactor + (Math.random() * 0.05);
-    return Math.max(0, predicted);
-  };
+# Initialize session state
+if 'historical_data' not in st.session_state:
+    # Generate sample historical data
+    dates = pd.date_range(end=datetime.now(), periods=100, freq='H')
+    st.session_state.historical_data = pd.DataFrame({
+        'timestamp': dates,
+        'pH': 7.0 + np.random.randn(100) * 0.5,
+        'temperature': 27.0 + np.random.randn(100) * 2,
+        'ammonia': 0.2 + np.abs(np.random.randn(100) * 0.15)
+    })
 
-  const handlePredict = () => {
-    setLoading(true);
-    setTimeout(() => {
-      const ammoniaPrediction = predictAmmonia(ph, temperature);
-      setPrediction(ammoniaPrediction);
-      setLoading(false);
-      
-      // Add to historical data
-      const now = new Date();
-      setHistoricalData(prev => [...prev, {
-        timestamp: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-        fullDate: now,
-        pH: ph,
-        temperature: temperature,
-        ammonia: ammoniaPrediction
-      }].slice(-50));
-    }, 500);
-  };
+if 'real_time_mode' not in st.session_state:
+    st.session_state.real_time_mode = False
 
-  const getRiskLevel = (ammoniaLevel) => {
-    if (ammoniaLevel < 0.2) return { level: 'Low', color: 'text-green-600', bg: 'bg-green-50', border: 'border-green-200' };
-    if (ammoniaLevel < 0.4) return { level: 'Moderate', color: 'text-yellow-600', bg: 'bg-yellow-50', border: 'border-yellow-200' };
-    return { level: 'High', color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-200' };
-  };
+if 'prediction_history' not in st.session_state:
+    st.session_state.prediction_history = []
 
-  const getPrescriptiveAdvice = (phValue, tempValue, ammoniaLevel) => {
-    const advice = [];
+# ML Prediction Function (simplified model)
+def predict_ammonia(ph, temperature):
+    """
+    Simplified ML prediction based on pH and temperature
+    Replace this with your actual trained model
+    """
+    # Standardize inputs (using approximate means and stds)
+    ph_scaled = (ph - 7.5) / 1.0
+    temp_scaled = (temperature - 27.0) / 3.0
     
-    if (phValue > 8.0 && tempValue > 28.0) {
-      advice.push({
-        priority: 'High',
-        icon: '🔴',
-        message: 'Critical: Both pH and temperature are elevated. Immediate water change recommended (30-40%).',
-        action: 'Perform partial water change and increase aeration'
-      });
-    } else if (phValue > 8.0) {
-      advice.push({
-        priority: 'Medium',
-        icon: '🟡',
-        message: 'pH is elevated. This increases ammonia toxicity.',
-        action: 'Add pH buffer or perform gradual water change'
-      });
-    } else if (tempValue > 28.0) {
-      advice.push({
-        priority: 'Medium',
-        icon: '🟡',
-        message: 'Water temperature is high. Reduce temperature to prevent ammonia formation.',
-        action: 'Increase aeration, reduce feeding, or add cooling system'
-      });
-    }
+    # Simple linear combination (replace with actual model)
+    prediction = 0.15 + (ph_scaled * 0.08) + (temp_scaled * 0.05)
+    prediction = max(0, prediction + np.random.randn() * 0.02)
+    
+    return prediction
 
-    if (ammoniaLevel > 0.4) {
-      advice.push({
-        priority: 'High',
-        icon: '🔴',
-        message: 'High ammonia detected! Immediate action required.',
-        action: 'Stop feeding, perform 40-50% water change, add ammonia neutralizer'
-      });
-    } else if (ammoniaLevel > 0.2) {
-      advice.push({
-        priority: 'Medium',
-        icon: '🟡',
-        message: 'Moderate ammonia levels. Monitor closely.',
-        action: 'Reduce feeding by 50%, increase monitoring frequency'
-      });
-    } else {
-      advice.push({
-        priority: 'Low',
-        icon: '🟢',
-        message: 'Water quality is within acceptable range.',
-        action: 'Continue regular monitoring and maintenance'
-      });
-    }
+# Risk Assessment Function
+def get_risk_level(ammonia):
+    """Classify ammonia risk level"""
+    if ammonia < 0.2:
+        return "Low", "🟢", "success"
+    elif ammonia < 0.4:
+        return "Moderate", "🟡", "warning"
+    else:
+        return "High", "🔴", "danger"
 
-    return advice;
-  };
+# Prescriptive Analytics Function
+def get_prescriptive_advice(ph, temperature, ammonia):
+    """Generate prescriptive recommendations"""
+    advice_list = []
+    
+    # Critical conditions
+    if ph > 8.0 and temperature > 28.0:
+        advice_list.append({
+            'priority': 'High',
+            'icon': '🔴',
+            'message': 'Critical: Both pH and temperature are elevated',
+            'action': 'Perform immediate 30-40% water change and increase aeration',
+            'type': 'danger'
+        })
+    elif ph > 8.0:
+        advice_list.append({
+            'priority': 'Medium',
+            'icon': '🟡',
+            'message': 'pH is elevated, increasing ammonia toxicity',
+            'action': 'Add pH buffer or perform gradual water change (20-30%)',
+            'type': 'warning'
+        })
+    elif temperature > 28.0:
+        advice_list.append({
+            'priority': 'Medium',
+            'icon': '🟡',
+            'message': 'Water temperature is high',
+            'action': 'Increase aeration, reduce feeding by 30%, check cooling system',
+            'type': 'warning'
+        })
+    
+    # Ammonia-specific advice
+    if ammonia > 0.4:
+        advice_list.append({
+            'priority': 'High',
+            'icon': '🔴',
+            'message': 'High ammonia detected! Immediate action required',
+            'action': 'Stop feeding for 24hrs, perform 50% water change, add ammonia neutralizer',
+            'type': 'danger'
+        })
+    elif ammonia > 0.2:
+        advice_list.append({
+            'priority': 'Medium',
+            'icon': '🟡',
+            'message': 'Moderate ammonia levels detected',
+            'action': 'Reduce feeding by 50%, increase monitoring frequency to 4x daily',
+            'type': 'warning'
+        })
+    else:
+        advice_list.append({
+            'priority': 'Low',
+            'icon': '🟢',
+            'message': 'Water quality is within acceptable range',
+            'action': 'Continue regular monitoring and maintenance schedule',
+            'type': 'success'
+        })
+    
+    return advice_list
 
-  const risk = prediction !== null ? getRiskLevel(prediction) : null;
-  const prescriptiveAdvice = prediction !== null ? getPrescriptiveAdvice(ph, temperature, prediction) : [];
+# Header
+st.markdown('<p class="main-header">💧 Water Quality Monitoring with Ammonia Prediction</p>', unsafe_allow_html=True)
+st.markdown("##### Real-time ML Analytics for Aquaculture Management")
 
-  // Calculate statistics
-  const stats = historicalData.length > 0 ? {
-    avgPh: (historicalData.reduce((sum, d) => sum + d.pH, 0) / historicalData.length).toFixed(2),
-    avgTemp: (historicalData.reduce((sum, d) => sum + d.temperature, 0) / historicalData.length).toFixed(2),
-    avgAmmonia: (historicalData.reduce((sum, d) => sum + d.ammonia, 0) / historicalData.length).toFixed(3),
-    maxAmmonia: Math.max(...historicalData.map(d => d.ammonia)).toFixed(3)
-  } : null;
+# Sidebar
+with st.sidebar:
+    st.header("⚙️ Control Panel")
+    
+    # Real-time mode toggle
+    st.markdown("---")
+    st.subheader("🔌 Sensor Connection")
+    real_time_toggle = st.toggle("Enable Real-time Mode", value=st.session_state.real_time_mode)
+    st.session_state.real_time_mode = real_time_toggle
+    
+    if st.session_state.real_time_mode:
+        st.success("✅ Live monitoring active")
+        st.info("📡 Receiving data from ESP32 sensors")
+    else:
+        st.warning("⚠️ Manual input mode")
+    
+    st.markdown("---")
+    
+    # Data refresh
+    if st.button("🔄 Refresh Data"):
+        st.rerun()
+    
+    st.markdown("---")
+    st.subheader("📊 Data Settings")
+    show_raw_data = st.checkbox("Show raw data table", value=False)
+    chart_points = st.slider("Chart history points", 20, 100, 50)
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-cyan-50 p-4 md:p-8">
-      <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="bg-white rounded-2xl shadow-lg p-6 border-l-4 border-blue-500">
-          <div className="flex items-center gap-3">
-            <Droplets className="w-10 h-10 text-blue-500" />
-            <div>
-              <h1 className="text-3xl font-bold text-gray-800">Water Quality Monitoring System</h1>
-              <p className="text-gray-600">Real-time Ammonia Prediction with ML Analytics</p>
-            </div>
-          </div>
+# Main content
+col1, col2 = st.columns(2)
+
+# Input Section
+with col1:
+    st.subheader("🧪 Enter Sensor Readings")
+    
+    if st.session_state.real_time_mode:
+        # Simulate real-time sensor data
+        ph_value = round(7.0 + np.random.randn() * 0.8, 2)
+        temp_value = round(27.0 + np.random.randn() * 2.5, 2)
+        st.info("📡 Auto-updating from sensors...")
+    else:
+        ph_value = 7.5
+        temp_value = 28.0
+    
+    # pH Input
+    st.markdown("##### pH Level")
+    ph = st.slider(
+        "pH",
+        min_value=0.0,
+        max_value=14.0,
+        value=float(ph_value),
+        step=0.1,
+        disabled=st.session_state.real_time_mode,
+        label_visibility="collapsed"
+    )
+    st.metric("Current pH", f"{ph:.2f}")
+    
+    # Temperature Input
+    st.markdown("##### Temperature (Celsius)")
+    temperature = st.slider(
+        "Temperature",
+        min_value=0.0,
+        max_value=40.0,
+        value=float(temp_value),
+        step=0.1,
+        disabled=st.session_state.real_time_mode,
+        label_visibility="collapsed"
+    )
+    st.metric("Current Temperature", f"{temperature:.2f}°C")
+    
+    # Predict Button
+    if st.button("🔍 Predict Ammonia Level", type="primary", use_container_width=True):
+        with st.spinner("Analyzing water quality..."):
+            time.sleep(0.5)
+            prediction = predict_ammonia(ph, temperature)
+            
+            # Store prediction
+            st.session_state.prediction_history.append({
+                'timestamp': datetime.now(),
+                'pH': ph,
+                'temperature': temperature,
+                'ammonia': prediction
+            })
+            
+            # Add to historical data
+            new_row = pd.DataFrame({
+                'timestamp': [datetime.now()],
+                'pH': [ph],
+                'temperature': [temperature],
+                'ammonia': [prediction]
+            })
+            st.session_state.historical_data = pd.concat([
+                st.session_state.historical_data,
+                new_row
+            ]).tail(200).reset_index(drop=True)
+
+# Prediction Result Section
+with col2:
+    st.subheader("🔬 Prediction Result")
+    
+    if len(st.session_state.prediction_history) > 0:
+        latest_prediction = st.session_state.prediction_history[-1]
+        ammonia_value = latest_prediction['ammonia']
+        risk_level, risk_icon, risk_type = get_risk_level(ammonia_value)
+        
+        # Display prediction
+        st.markdown(f"### {risk_icon} {ammonia_value:.4f} mg/L")
+        st.markdown(f"**Risk Level:** {risk_level}")
+        
+        # Metrics
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.metric("pH Input", f"{latest_prediction['pH']:.2f}")
+        with col_b:
+            st.metric("Temperature", f"{latest_prediction['temperature']:.2f}°C")
+        with col_c:
+            st.metric("Risk", risk_level)
+        
+        # Risk indicator
+        if risk_type == "success":
+            st.success(f"{risk_icon} Low risk - Water quality is safe")
+        elif risk_type == "warning":
+            st.warning(f"{risk_icon} Moderate risk - Monitor closely")
+        else:
+            st.error(f"{risk_icon} High risk - Immediate action required!")
+    else:
+        st.info("👆 Click 'Predict Ammonia Level' to get started")
+
+# Prescriptive Analytics Section (Phase 6)
+st.markdown("---")
+st.header("📋 Prescriptive Recommendations")
+
+if len(st.session_state.prediction_history) > 0:
+    latest = st.session_state.prediction_history[-1]
+    advice_list = get_prescriptive_advice(
+        latest['pH'],
+        latest['temperature'],
+        latest['ammonia']
+    )
+    
+    for advice in advice_list:
+        box_class = f"{advice['type']}-box"
+        st.markdown(f"""
+        <div class="{box_class}">
+            <h4>{advice['icon']} {advice['message']}</h4>
+            <p><strong>Recommended Action:</strong> {advice['action']}</p>
         </div>
+        """, unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        {/* Real-time Toggle */}
-        <div className="bg-white rounded-xl shadow-md p-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Activity className={`w-5 h-5 ${realTimeMode ? 'text-green-500 animate-pulse' : 'text-gray-400'}`} />
-            <span className="font-medium text-gray-700">Sensor Connection Mode</span>
-          </div>
-          <button
-            onClick={() => setRealTimeMode(!realTimeMode)}
-            className={`px-6 py-2 rounded-lg font-medium transition-all ${
-              realTimeMode 
-                ? 'bg-green-500 text-white hover:bg-green-600' 
-                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-            }`}
-          >
-            {realTimeMode ? 'Live Monitoring Active' : 'Enable Real-time Mode'}
-          </button>
-        </div>
+# Statistics Section
+st.markdown("---")
+st.header("📊 Water Quality Statistics")
 
-        {/* Input Section */}
-        <div className="grid md:grid-cols-2 gap-6">
-          {/* pH Input */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <label className="block text-sm font-semibold text-gray-700 mb-3">
-              <div className="flex items-center gap-2 mb-2">
-                <Activity className="w-5 h-5 text-blue-500" />
-                pH Level
-              </div>
-            </label>
-            <div className="space-y-3">
-              <input
-                type="number"
-                value={ph}
-                onChange={(e) => setPh(parseFloat(e.target.value))}
-                step="0.1"
-                min="0"
-                max="14"
-                disabled={realTimeMode}
-                className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none text-lg font-medium disabled:bg-gray-100"
-              />
-              <input
-                type="range"
-                value={ph}
-                onChange={(e) => setPh(parseFloat(e.target.value))}
-                step="0.1"
-                min="0"
-                max="14"
-                disabled={realTimeMode}
-                className="w-full h-2 bg-blue-200 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
-              />
-              <div className="text-sm text-gray-600">Current: <span className="font-bold text-blue-600">{ph.toFixed(2)}</span></div>
-            </div>
-          </div>
+if len(st.session_state.historical_data) > 0:
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        avg_ph = st.session_state.historical_data['pH'].mean()
+        st.metric("Average pH", f"{avg_ph:.2f}")
+    
+    with col2:
+        avg_temp = st.session_state.historical_data['temperature'].mean()
+        st.metric("Average Temperature", f"{avg_temp:.2f}°C")
+    
+    with col3:
+        avg_ammonia = st.session_state.historical_data['ammonia'].mean()
+        st.metric("Average Ammonia", f"{avg_ammonia:.3f} mg/L")
+    
+    with col4:
+        max_ammonia = st.session_state.historical_data['ammonia'].max()
+        st.metric("Peak Ammonia", f"{max_ammonia:.3f} mg/L")
 
-          {/* Temperature Input */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <label className="block text-sm font-semibold text-gray-700 mb-3">
-              <div className="flex items-center gap-2 mb-2">
-                <ThermometerSun className="w-5 h-5 text-orange-500" />
-                Temperature (°C)
-              </div>
-            </label>
-            <div className="space-y-3">
-              <input
-                type="number"
-                value={temperature}
-                onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                step="0.1"
-                min="0"
-                max="40"
-                disabled={realTimeMode}
-                className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-orange-500 focus:outline-none text-lg font-medium disabled:bg-gray-100"
-              />
-              <input
-                type="range"
-                value={temperature}
-                onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                step="0.1"
-                min="0"
-                max="40"
-                disabled={realTimeMode}
-                className="w-full h-2 bg-orange-200 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
-              />
-              <div className="text-sm text-gray-600">Current: <span className="font-bold text-orange-600">{temperature.toFixed(2)}°C</span></div>
-            </div>
-          </div>
-        </div>
+# Historical Trends Chart (Phase 5)
+st.markdown("---")
+st.header("📈 Historical Trends")
 
-        {/* Predict Button */}
-        <button
-          onClick={handlePredict}
-          disabled={loading || realTimeMode}
-          className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loading ? 'Analyzing...' : realTimeMode ? 'Auto-predicting...' : '🔍 Predict Ammonia Level'}
-        </button>
+if len(st.session_state.historical_data) > 0:
+    # Prepare data
+    chart_data = st.session_state.historical_data.tail(chart_points).copy()
+    
+    # Multi-line chart
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=chart_data['timestamp'],
+        y=chart_data['pH'],
+        mode='lines+markers',
+        name='pH Level',
+        line=dict(color='#3B82F6', width=2),
+        marker=dict(size=4)
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=chart_data['timestamp'],
+        y=chart_data['temperature'],
+        mode='lines+markers',
+        name='Temperature (°C)',
+        line=dict(color='#F97316', width=2),
+        marker=dict(size=4),
+        yaxis='y2'
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=chart_data['timestamp'],
+        y=chart_data['ammonia'],
+        mode='lines+markers',
+        name='Ammonia (mg/L)',
+        line=dict(color='#8B5CF6', width=2),
+        marker=dict(size=4),
+        yaxis='y3'
+    ))
+    
+    fig.update_layout(
+        title="Water Quality Parameters Over Time",
+        xaxis=dict(title="Time"),
+        yaxis=dict(title="pH", titlefont=dict(color='#3B82F6'), tickfont=dict(color='#3B82F6')),
+        yaxis2=dict(title="Temperature (°C)", titlefont=dict(color='#F97316'), tickfont=dict(color='#F97316'), overlaying='y', side='right'),
+        yaxis3=dict(title="Ammonia (mg/L)", titlefont=dict(color='#8B5CF6'), tickfont=dict(color='#8B5CF6'), overlaying='y', side='right', position=0.95),
+        hovermode='x unified',
+        height=400
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
 
-        {/* Prediction Result */}
-        {prediction !== null && (
-          <div className={`bg-white rounded-xl shadow-lg p-6 border-l-4 ${risk.border}`}>
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h2 className="text-xl font-bold text-gray-800 mb-2">🔬 Prediction Result</h2>
-                <p className="text-sm text-gray-600">Based on ML Model Analysis</p>
-              </div>
-              <div className={`px-4 py-2 rounded-lg ${risk.bg} border-2 ${risk.border}`}>
-                <span className={`text-sm font-bold ${risk.color}`}>{risk.level} Risk</span>
-              </div>
-            </div>
-            <div className="bg-gradient-to-r from-blue-50 to-cyan-50 rounded-lg p-6 mb-4">
-              <div className="text-center">
-                <div className="text-sm text-gray-600 mb-1">Predicted Ammonia (mg/L)</div>
-                <div className="text-5xl font-bold text-blue-600">{prediction.toFixed(4)}</div>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4 text-center">
-              <div>
-                <div className="text-sm text-gray-600">pH Input</div>
-                <div className="text-xl font-bold text-gray-800">{ph.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-sm text-gray-600">Temperature</div>
-                <div className="text-xl font-bold text-gray-800">{temperature.toFixed(2)}°C</div>
-              </div>
-              <div>
-                <div className="text-sm text-gray-600">Risk Level</div>
-                <div className={`text-xl font-bold ${risk.color}`}>{risk.level}</div>
-              </div>
-            </div>
-          </div>
-        )}
+# Ammonia Risk Timeline
+st.markdown("---")
+st.header("🎯 Ammonia Risk Timeline")
 
-        {/* Prescriptive Analytics (Phase 6) */}
-        {prescriptiveAdvice.length > 0 && (
-          <div className="bg-white rounded-xl shadow-lg p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <AlertTriangle className="w-6 h-6 text-orange-500" />
-              <h2 className="text-xl font-bold text-gray-800">📋 Prescriptive Recommendations</h2>
-            </div>
-            <div className="space-y-3">
-              {prescriptiveAdvice.map((item, idx) => (
-                <div
-                  key={idx}
-                  className={`p-4 rounded-lg border-2 ${
-                    item.priority === 'High' ? 'border-red-200 bg-red-50' :
-                    item.priority === 'Medium' ? 'border-yellow-200 bg-yellow-50' :
-                    'border-green-200 bg-green-50'
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <span className="text-2xl">{item.icon}</span>
-                    <div className="flex-1">
-                      <div className="font-semibold text-gray-800 mb-1">{item.message}</div>
-                      <div className="text-sm text-gray-700 bg-white bg-opacity-50 p-2 rounded">
-                        <span className="font-medium">Action:</span> {item.action}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+if len(st.session_state.historical_data) > 0:
+    chart_data = st.session_state.historical_data.tail(chart_points).copy()
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=chart_data['timestamp'],
+        y=chart_data['ammonia'],
+        mode='lines',
+        name='Ammonia Level',
+        fill='tozeroy',
+        line=dict(color='#8B5CF6', width=2),
+        fillcolor='rgba(139, 92, 246, 0.3)'
+    ))
+    
+    # Add risk threshold lines
+    fig.add_hline(y=0.2, line_dash="dash", line_color="yellow", annotation_text="Moderate Risk Threshold")
+    fig.add_hline(y=0.4, line_dash="dash", line_color="red", annotation_text="High Risk Threshold")
+    
+    fig.update_layout(
+        title="Ammonia Concentration Timeline",
+        xaxis_title="Time",
+        yaxis_title="Ammonia (mg/L)",
+        hovermode='x unified',
+        height=300
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Risk legend
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("🟢 **Safe:** < 0.2 mg/L")
+    with col2:
+        st.markdown("🟡 **Moderate:** 0.2 - 0.4 mg/L")
+    with col3:
+        st.markdown("🔴 **High:** > 0.4 mg/L")
 
-        {/* Statistics Cards */}
-        {stats && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-white rounded-xl shadow-md p-4">
-              <div className="text-sm text-gray-600 mb-1">Avg pH</div>
-              <div className="text-2xl font-bold text-blue-600">{stats.avgPh}</div>
-            </div>
-            <div className="bg-white rounded-xl shadow-md p-4">
-              <div className="text-sm text-gray-600 mb-1">Avg Temp</div>
-              <div className="text-2xl font-bold text-orange-600">{stats.avgTemp}°C</div>
-            </div>
-            <div className="bg-white rounded-xl shadow-md p-4">
-              <div className="text-sm text-gray-600 mb-1">Avg Ammonia</div>
-              <div className="text-2xl font-bold text-purple-600">{stats.avgAmmonia}</div>
-            </div>
-            <div className="bg-white rounded-xl shadow-md p-4">
-              <div className="text-sm text-gray-600 mb-1">Peak Ammonia</div>
-              <div className="text-2xl font-bold text-red-600">{stats.maxAmmonia}</div>
-            </div>
-          </div>
-        )}
+# Raw Data Table
+if show_raw_data:
+    st.markdown("---")
+    st.header("📊 Raw Data Table")
+    st.dataframe(
+        st.session_state.historical_data.tail(50),
+        use_container_width=True,
+        hide_index=True
+    )
 
-        {/* Historical Trends Chart */}
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <TrendingUp className="w-6 h-6 text-blue-500" />
-            <h2 className="text-xl font-bold text-gray-800">📊 Historical Trends</h2>
-          </div>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={historicalData.slice(-30)}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-              <XAxis dataKey="timestamp" stroke="#666" style={{ fontSize: '12px' }} />
-              <YAxis stroke="#666" style={{ fontSize: '12px' }} />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '8px' }}
-              />
-              <Legend />
-              <Line type="monotone" dataKey="pH" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} name="pH Level" />
-              <Line type="monotone" dataKey="temperature" stroke="#f97316" strokeWidth={2} dot={{ r: 3 }} name="Temperature (°C)" />
-              <Line type="monotone" dataKey="ammonia" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3 }} name="Ammonia (mg/L)" />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Ammonia Risk Area Chart */}
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <Database className="w-6 h-6 text-purple-500" />
-            <h2 className="text-xl font-bold text-gray-800">🎯 Ammonia Risk Timeline</h2>
-          </div>
-          <ResponsiveContainer width="100%" height={250}>
-            <AreaChart data={historicalData.slice(-30)}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-              <XAxis dataKey="timestamp" stroke="#666" style={{ fontSize: '12px' }} />
-              <YAxis stroke="#666" style={{ fontSize: '12px' }} />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '8px' }}
-              />
-              <Area type="monotone" dataKey="ammonia" stroke="#8b5cf6" fill="#c4b5fd" name="Ammonia (mg/L)" />
-            </AreaChart>
-          </ResponsiveContainer>
-          <div className="mt-4 flex justify-center gap-6 text-sm">
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 bg-green-400 rounded"></div>
-              <span>Safe (&lt;0.2)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 bg-yellow-400 rounded"></div>
-              <span>Moderate (0.2-0.4)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 bg-red-400 rounded"></div>
-              <span>High (&gt;0.4)</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="bg-gray-800 text-white rounded-xl shadow-lg p-6 text-center">
-          <p className="text-sm">🌊 Water Quality Monitoring System | Powered by ESP32, Firebase & ML Analytics</p>
-          <p className="text-xs text-gray-400 mt-2">Phase 5: Real-time Visualization | Phase 6: Prescriptive Analytics ✓</p>
-        </div>
-      </div>
+# Footer
+st.markdown("---")
+st.markdown("""
+    <div style='text-align: center; padding: 2rem; background-color: #1F2937; color: white; border-radius: 0.5rem;'>
+        <p style='margin: 0; font-size: 0.9rem;'>🌊 Water Quality Monitoring System</p>
+        <p style='margin: 0.5rem 0 0 0; font-size: 0.75rem; color: #9CA3AF;'>
+            Powered by ESP32, Firebase & ML Analytics | Phase 5: Visualization ✓ | Phase 6: Prescriptive Analytics ✓
+        </p>
     </div>
-  );
-};
+""", unsafe_allow_html=True)
 
-export default WaterQualityDashboard;
+# Auto-refresh for real-time mode
+if st.session_state.real_time_mode:
+    time.sleep(3)
+    st.rerun()
