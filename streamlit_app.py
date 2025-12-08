@@ -1,10 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-import plotly.express as px
 from datetime import datetime, timedelta
-import pickle
 import time
 
 # Page configuration
@@ -228,7 +225,7 @@ with col1:
         disabled=st.session_state.real_time_mode,
         label_visibility="collapsed"
     )
-    st.metric("Current Temperature", f"{temperature:.2f}°C")
+    st.metric("Current Temperature", f"{temperature:.2f} C")
     
     # Predict Button
     if st.button("🔍 Predict Ammonia Level", type="primary", use_container_width=True):
@@ -274,7 +271,7 @@ with col2:
         with col_a:
             st.metric("pH Input", f"{latest_prediction['pH']:.2f}")
         with col_b:
-            st.metric("Temperature", f"{latest_prediction['temperature']:.2f}°C")
+            st.metric("Temperature", f"{latest_prediction['temperature']:.2f} C")
         with col_c:
             st.metric("Risk", risk_level)
         
@@ -323,7 +320,7 @@ if len(st.session_state.historical_data) > 0:
     
     with col2:
         avg_temp = st.session_state.historical_data['temperature'].mean()
-        st.metric("Average Temperature", f"{avg_temp:.2f}°C")
+        st.metric("Average Temp", f"{avg_temp:.2f} C")
     
     with col3:
         avg_ammonia = st.session_state.historical_data['ammonia'].mean()
@@ -341,49 +338,23 @@ if len(st.session_state.historical_data) > 0:
     # Prepare data
     chart_data = st.session_state.historical_data.tail(chart_points).copy()
     
-    # Multi-line chart
-    fig = go.Figure()
+    # Create tabs for different parameters
+    tab1, tab2, tab3 = st.tabs(["All Parameters", "pH & Temperature", "Ammonia"])
     
-    fig.add_trace(go.Scatter(
-        x=chart_data['timestamp'],
-        y=chart_data['pH'],
-        mode='lines+markers',
-        name='pH Level',
-        line=dict(color='#3B82F6', width=2),
-        marker=dict(size=4)
-    ))
+    with tab1:
+        # All parameters in one chart
+        display_df = chart_data.set_index('timestamp')[['pH', 'temperature', 'ammonia']]
+        st.line_chart(display_df, height=400)
     
-    fig.add_trace(go.Scatter(
-        x=chart_data['timestamp'],
-        y=chart_data['temperature'],
-        mode='lines+markers',
-        name='Temperature (°C)',
-        line=dict(color='#F97316', width=2),
-        marker=dict(size=4),
-        yaxis='y2'
-    ))
+    with tab2:
+        # pH and Temperature
+        display_df = chart_data.set_index('timestamp')[['pH', 'temperature']]
+        st.line_chart(display_df, height=400)
     
-    fig.add_trace(go.Scatter(
-        x=chart_data['timestamp'],
-        y=chart_data['ammonia'],
-        mode='lines+markers',
-        name='Ammonia (mg/L)',
-        line=dict(color='#8B5CF6', width=2),
-        marker=dict(size=4),
-        yaxis='y3'
-    ))
-    
-    fig.update_layout(
-        title="Water Quality Parameters Over Time",
-        xaxis=dict(title="Time"),
-        yaxis=dict(title="pH", titlefont=dict(color='#3B82F6'), tickfont=dict(color='#3B82F6')),
-        yaxis2=dict(title="Temperature (°C)", titlefont=dict(color='#F97316'), tickfont=dict(color='#F97316'), overlaying='y', side='right'),
-        yaxis3=dict(title="Ammonia (mg/L)", titlefont=dict(color='#8B5CF6'), tickfont=dict(color='#8B5CF6'), overlaying='y', side='right', position=0.95),
-        hovermode='x unified',
-        height=400
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
+    with tab3:
+        # Ammonia only
+        display_df = chart_data.set_index('timestamp')[['ammonia']]
+        st.area_chart(display_df, height=400)
 
 # Ammonia Risk Timeline
 st.markdown("---")
@@ -392,31 +363,9 @@ st.header("🎯 Ammonia Risk Timeline")
 if len(st.session_state.historical_data) > 0:
     chart_data = st.session_state.historical_data.tail(chart_points).copy()
     
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=chart_data['timestamp'],
-        y=chart_data['ammonia'],
-        mode='lines',
-        name='Ammonia Level',
-        fill='tozeroy',
-        line=dict(color='#8B5CF6', width=2),
-        fillcolor='rgba(139, 92, 246, 0.3)'
-    ))
-    
-    # Add risk threshold lines
-    fig.add_hline(y=0.2, line_dash="dash", line_color="yellow", annotation_text="Moderate Risk Threshold")
-    fig.add_hline(y=0.4, line_dash="dash", line_color="red", annotation_text="High Risk Threshold")
-    
-    fig.update_layout(
-        title="Ammonia Concentration Timeline",
-        xaxis_title="Time",
-        yaxis_title="Ammonia (mg/L)",
-        hovermode='x unified',
-        height=300
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
+    # Area chart for ammonia
+    display_df = chart_data.set_index('timestamp')[['ammonia']]
+    st.area_chart(display_df, height=300, color='#8B5CF6')
     
     # Risk legend
     col1, col2, col3 = st.columns(3)
@@ -427,12 +376,37 @@ if len(st.session_state.historical_data) > 0:
     with col3:
         st.markdown("🔴 **High:** > 0.4 mg/L")
 
+# Recent Predictions Table
+st.markdown("---")
+st.header("🕐 Recent Predictions")
+
+if len(st.session_state.prediction_history) > 0:
+    recent_predictions = pd.DataFrame(st.session_state.prediction_history[-10:])
+    recent_predictions['timestamp'] = recent_predictions['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    recent_predictions['pH'] = recent_predictions['pH'].round(2)
+    recent_predictions['temperature'] = recent_predictions['temperature'].round(2)
+    recent_predictions['ammonia'] = recent_predictions['ammonia'].round(4)
+    
+    st.dataframe(
+        recent_predictions,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "timestamp": "Time",
+            "pH": "pH",
+            "temperature": "Temp (C)",
+            "ammonia": "Ammonia (mg/L)"
+        }
+    )
+
 # Raw Data Table
 if show_raw_data:
     st.markdown("---")
-    st.header("📊 Raw Data Table")
+    st.header("📊 Raw Historical Data")
+    display_data = st.session_state.historical_data.tail(50).copy()
+    display_data['timestamp'] = display_data['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
     st.dataframe(
-        st.session_state.historical_data.tail(50),
+        display_data,
         use_container_width=True,
         hide_index=True
     )
