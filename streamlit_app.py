@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import time
+import pickle
+from scipy.linalg import pinv
 
 # Page configuration
 st.set_page_config(
@@ -52,40 +54,70 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if 'historical_data' not in st.session_state:
-    # Generate sample historical data
-    dates = pd.date_range(end=datetime.now(), periods=100, freq='H')
-    st.session_state.historical_data = pd.DataFrame({
-        'timestamp': dates,
-        'pH': 7.0 + np.random.randn(100) * 0.5,
-        'temperature': 27.0 + np.random.randn(100) * 2,
-        'ammonia': 0.2 + np.abs(np.random.randn(100) * 0.15)
-    })
+# ELM PREDICTION FUNCTION (FOR ELM MODELS)
+def ELM_predict(model, X_test):
+    """Predicts using the trained ELM model."""
+    H_test = model['activation'](np.dot(X_test, model['Win']) + model['B'])
+    y_pred = np.dot(H_test, model['Beta'])
+    return y_pred
 
-if 'real_time_mode' not in st.session_state:
-    st.session_state.real_time_mode = False
+# LOAD ACTUAL TRAINED ML MODEL
+@st.cache_resource
+def load_ml_model():
+    """Load the trained ML model from pickle file."""
+    try:
+        with open('final_ml_model.pkl', 'rb') as f:
+            model_info = pickle.load(f)
+        return model_info
+    except FileNotFoundError:
+        st.error("❌ Model file 'final_ml_model.pkl' not found!")
+        st.info("Please upload your trained model file to the same directory as this script.")
+        return None
+    except Exception as e:
+        st.error(f"❌ Error loading model: {str(e)}")
+        return None
 
-if 'prediction_history' not in st.session_state:
-    st.session_state.prediction_history = []
+# Load model at startup
+model_info = load_ml_model()
 
-# ML Prediction Function (simplified model)
-def predict_ammonia(ph, temperature):
+# REAL ML PREDICTION FUNCTION
+def predict_ammonia_real(ph, temperature):
     """
-    Simplified ML prediction based on pH and temperature
-    Replace this with your actual trained model
+    Use the ACTUAL trained ML model to predict ammonia.
+    This replaces the fake prediction function.
     """
-    # Standardize inputs (using approximate means and stds)
-    ph_scaled = (ph - 7.5) / 1.0
-    temp_scaled = (temperature - 27.0) / 3.0
+    if model_info is None:
+        st.error("Model not loaded. Cannot make predictions.")
+        return 0.0
     
-    # Simple linear combination (replace with actual model)
-    prediction = 0.15 + (ph_scaled * 0.08) + (temp_scaled * 0.05)
-    prediction = max(0, prediction + np.random.randn() * 0.02)
-    
-    return prediction
+    try:
+        # Get scaler and model
+        scaler = model_info['scaler_X']
+        model = model_info['model']
+        
+        # Prepare input data
+        input_data = np.array([[ph, temperature]])
+        input_scaled = scaler.transform(input_data)
+        
+        # Check if it's an ELM model or sklearn model
+        if isinstance(model, dict) and 'Win' in model:
+            # ELM Model
+            prediction = ELM_predict(model, input_scaled)
+            if prediction.ndim > 1:
+                prediction = prediction.ravel()[0]
+            else:
+                prediction = float(prediction)
+        else:
+            # Random Forest or GBRT
+            prediction = model.predict(input_scaled)[0]
+        
+        return max(0, float(prediction))  # Ensure non-negative
+        
+    except Exception as e:
+        st.error(f"Prediction error: {str(e)}")
+        return 0.0
 
-# Risk Assessment Function
+# RISK ASSESSMENT FUNCTION
 def get_risk_level(ammonia):
     """Classify ammonia risk level"""
     if ammonia < 0.2:
@@ -95,7 +127,7 @@ def get_risk_level(ammonia):
     else:
         return "High", "🔴", "danger"
 
-# Prescriptive Analytics Function
+# PRESCRIPTIVE ANALYTICS FUNCTION
 def get_prescriptive_advice(ph, temperature, ammonia):
     """Generate prescriptive recommendations"""
     advice_list = []
@@ -154,11 +186,35 @@ def get_prescriptive_advice(ph, temperature, ammonia):
     
     return advice_list
 
-# Header
-st.markdown('<p class="main-header">💧 Water Quality Monitoring with Ammonia Prediction</p>', unsafe_allow_html=True)
+# INITIALIZE SESSION STATE
+if 'historical_data' not in st.session_state:
+    # Generate sample historical data (replace with Firebase data later)
+    dates = pd.date_range(end=datetime.now(), periods=100, freq='H')
+    st.session_state.historical_data = pd.DataFrame({
+        'timestamp': dates,
+        'pH': 7.0 + np.random.randn(100) * 0.5,
+        'temperature': 27.0 + np.random.randn(100) * 2,
+        'ammonia': 0.2 + np.abs(np.random.randn(100) * 0.15)
+    })
+
+if 'real_time_mode' not in st.session_state:
+    st.session_state.real_time_mode = False
+
+if 'prediction_history' not in st.session_state:
+    st.session_state.prediction_history = []
+
+# HEADER
+st.markdown('<p class="main-header">💧 Taal Lake Water Quality Monitoring</p>', unsafe_allow_html=True)
 st.markdown("##### Real-time ML Analytics for Aquaculture Management")
 
-# Sidebar
+# Show model info
+if model_info:
+    model_type = "ELM" if isinstance(model_info['model'], dict) and 'Win' in model_info['model'] else type(model_info['model']).__name__
+    st.success(f"✅ ML Model Loaded: **{model_type}**")
+else:
+    st.error("❌ ML Model not loaded. Please check 'final_ml_model.pkl' file.")
+
+# SIDEBAR
 with st.sidebar:
     st.header("⚙️ Control Panel")
     
@@ -185,7 +241,7 @@ with st.sidebar:
     show_raw_data = st.checkbox("Show raw data table", value=False)
     chart_points = st.slider("Chart history points", 20, 100, 50)
 
-# Main content
+# MAIN CONTENT
 col1, col2 = st.columns(2)
 
 # Input Section
@@ -225,37 +281,41 @@ with col1:
         disabled=st.session_state.real_time_mode,
         label_visibility="collapsed"
     )
-    st.metric("Current Temperature", f"{temperature:.2f} C")
+    st.metric("Current Temperature", f"{temperature:.2f} °C")
     
     # Predict Button
     if st.button("🔍 Predict Ammonia Level", type="primary", use_container_width=True):
-        with st.spinner("Analyzing water quality..."):
-            time.sleep(0.5)
-            prediction = predict_ammonia(ph, temperature)
-            
-            # Store prediction
-            st.session_state.prediction_history.append({
-                'timestamp': datetime.now(),
-                'pH': ph,
-                'temperature': temperature,
-                'ammonia': prediction
-            })
-            
-            # Add to historical data
-            new_row = pd.DataFrame({
-                'timestamp': [datetime.now()],
-                'pH': [ph],
-                'temperature': [temperature],
-                'ammonia': [prediction]
-            })
-            st.session_state.historical_data = pd.concat([
-                st.session_state.historical_data,
-                new_row
-            ]).tail(200).reset_index(drop=True)
+        if model_info is None:
+            st.error("Cannot predict: Model not loaded!")
+        else:
+            with st.spinner("Analyzing water quality with ML model..."):
+                time.sleep(0.5)
+                # USE REAL ML MODEL
+                prediction = predict_ammonia_real(ph, temperature)
+                
+                # Store prediction
+                st.session_state.prediction_history.append({
+                    'timestamp': datetime.now(),
+                    'pH': ph,
+                    'temperature': temperature,
+                    'ammonia': prediction
+                })
+                
+                # Add to historical data
+                new_row = pd.DataFrame({
+                    'timestamp': [datetime.now()],
+                    'pH': [ph],
+                    'temperature': [temperature],
+                    'ammonia': [prediction]
+                })
+                st.session_state.historical_data = pd.concat([
+                    st.session_state.historical_data,
+                    new_row
+                ]).tail(200).reset_index(drop=True)
 
 # Prediction Result Section
 with col2:
-    st.subheader("🔬 Prediction Result")
+    st.subheader("🔬 ML Prediction Result")
     
     if len(st.session_state.prediction_history) > 0:
         latest_prediction = st.session_state.prediction_history[-1]
@@ -271,7 +331,7 @@ with col2:
         with col_a:
             st.metric("pH Input", f"{latest_prediction['pH']:.2f}")
         with col_b:
-            st.metric("Temperature", f"{latest_prediction['temperature']:.2f} C")
+            st.metric("Temperature", f"{latest_prediction['temperature']:.2f} °C")
         with col_c:
             st.metric("Risk", risk_level)
         
@@ -285,7 +345,7 @@ with col2:
     else:
         st.info("👆 Click 'Predict Ammonia Level' to get started")
 
-# Prescriptive Analytics Section (Phase 6)
+# PRESCRIPTIVE ANALYTICS SECTION
 st.markdown("---")
 st.header("📋 Prescriptive Recommendations")
 
@@ -307,7 +367,7 @@ if len(st.session_state.prediction_history) > 0:
         """, unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
-# Statistics Section
+# STATISTICS SECTION
 st.markdown("---")
 st.header("📊 Water Quality Statistics")
 
@@ -320,7 +380,7 @@ if len(st.session_state.historical_data) > 0:
     
     with col2:
         avg_temp = st.session_state.historical_data['temperature'].mean()
-        st.metric("Average Temp", f"{avg_temp:.2f} C")
+        st.metric("Average Temp", f"{avg_temp:.2f} °C")
     
     with col3:
         avg_ammonia = st.session_state.historical_data['ammonia'].mean()
@@ -330,7 +390,7 @@ if len(st.session_state.historical_data) > 0:
         max_ammonia = st.session_state.historical_data['ammonia'].max()
         st.metric("Peak Ammonia", f"{max_ammonia:.3f} mg/L")
 
-# Historical Trends Chart (Phase 5)
+# HISTORICAL TRENDS CHART
 st.markdown("---")
 st.header("📈 Historical Trends")
 
@@ -356,7 +416,7 @@ if len(st.session_state.historical_data) > 0:
         display_df = chart_data.set_index('timestamp')[['ammonia']]
         st.area_chart(display_df, height=400)
 
-# Ammonia Risk Timeline
+# AMMONIA RISK TIMELINE
 st.markdown("---")
 st.header("🎯 Ammonia Risk Timeline")
 
@@ -376,7 +436,7 @@ if len(st.session_state.historical_data) > 0:
     with col3:
         st.markdown("🔴 **High:** > 0.4 mg/L")
 
-# Recent Predictions Table
+# RECENT PREDICTIONS TABLE
 st.markdown("---")
 st.header("🕐 Recent Predictions")
 
@@ -394,12 +454,12 @@ if len(st.session_state.prediction_history) > 0:
         column_config={
             "timestamp": "Time",
             "pH": "pH",
-            "temperature": "Temp (C)",
+            "temperature": "Temp (°C)",
             "ammonia": "Ammonia (mg/L)"
         }
     )
 
-# Raw Data Table
+# RAW DATA TABLE
 if show_raw_data:
     st.markdown("---")
     st.header("📊 Raw Historical Data")
@@ -411,13 +471,13 @@ if show_raw_data:
         hide_index=True
     )
 
-# Footer
+# FOOTER
 st.markdown("---")
 st.markdown("""
     <div style='text-align: center; padding: 2rem; background-color: #1F2937; color: white; border-radius: 0.5rem;'>
-        <p style='margin: 0; font-size: 0.9rem;'>🌊 Water Quality Monitoring System</p>
+        <p style='margin: 0; font-size: 0.9rem;'>🌊 Taal Lake Water Quality Monitoring System</p>
         <p style='margin: 0.5rem 0 0 0; font-size: 0.75rem; color: #9CA3AF;'>
-            Powered by ESP32, Firebase & ML Analytics | Phase 5: Visualization ✓ | Phase 6: Prescriptive Analytics ✓
+            Powered by ESP32, Firebase & Real ML Model (RF/GBRT/ELM) | Using Trained Model ✓
         </p>
     </div>
 """, unsafe_allow_html=True)
